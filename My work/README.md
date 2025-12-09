@@ -203,6 +203,7 @@ CREATE OR REPLACE TYPE T_Enseignant UNDER T_Personne (
     EnsSpec     VARCHAR2(50),
     EnsTitre    VARCHAR2(50),
     Departement REF T_Departement,
+    DepID       NUMBER, -- Ajout pour la FK relationnelle
 
     MEMBER PROCEDURE ajouterSeance(p_EtID NUMBER, p_ScType VARCHAR2, p_ScJour VARCHAR2,
                                  p_ScCreneau VARCHAR2, p_Descrip VARCHAR2,
@@ -225,6 +226,7 @@ CREATE OR REPLACE TYPE T_Etudiant UNDER T_Personne (
     EtStatut    VARCHAR2(20),
     EtBourse    VARCHAR2(20),
     Departement REF T_Departement,
+    DepID       NUMBER, -- Ajout pour la FK relationnelle
 
     MEMBER FUNCTION afficherInfos RETURN VARCHAR2,
     MEMBER PROCEDURE inscrire(p_EnsID NUMBER, p_ScType VARCHAR2, p_ScJour VARCHAR2,
@@ -247,22 +249,51 @@ CREATE TABLE Departements OF T_Departement
 ```
 
 
-##### Table pour stocker Personne, Enseignant & Etudiant
+##### Table pour stocker Enseignants
 ```SQL
-CREATE TABLE Personnes OF T_Personne
-    (
-        CONSTRAINT pk_personne PRIMARY KEY (ID)
-        -- Création d'un index pour les références (REF) (donne erreur, marche sans)
-        --SCOPE FOR (Departement) IS Departements
-    )
-    -- Permet de stocker les sous-types (Etudiant, Enseignant)
-    OBJECT IDENTIFIER IS PRIMARY KEY;
+CREATE TABLE Enseignants OF T_Enseignant (
+    CONSTRAINT pk_enseignant_obj PRIMARY KEY (ID)
+);
+ALTER TABLE Enseignants ADD CONSTRAINT fk_ens_dept FOREIGN KEY (DepID) REFERENCES Departements(DepID);
 ```
 
-##### Mettre à jour la table Departement pour que la référence de Chef pointe vers Personnes
+##### Table pour stocker Etudiants
+```SQL
+CREATE TABLE Etudiants OF T_Etudiant (
+    CONSTRAINT pk_etudiant_obj PRIMARY KEY (ID)
+);
+ALTER TABLE Etudiants ADD CONSTRAINT fk_etud_dept FOREIGN KEY (DepID) REFERENCES Departements(DepID);
+```
+```SQL
+CREATE VIEW Personnes AS
+SELECT 
+    ID, 
+    Nom, 
+    Prenom, 
+    Datenais, 
+    Adr, 
+    Tel, 
+    Email, 
+    Nss
+FROM Etudiants
+union all
+SELECT 
+    ID, 
+    Nom, 
+    Prenom, 
+    Datenais, 
+    Adr, 
+    Tel, 
+    Email, 
+    Nss
+FROM Enseignants;
+```
+
+
+##### Mettre à jour la table Departement pour que la référence de Chef pointe vers Enseignants
 ```SQL 
 ALTER TABLE Departements ADD (
-    SCOPE FOR (Chef) IS Personnes
+    SCOPE FOR (Chef) IS Enseignants
 );
 ```
 
@@ -306,8 +337,8 @@ CREATE TABLE Seances (
     CONSTRAINT uq_seance UNIQUE (EnsID, ScJour, ScCreneau, SalleID), 
     -- Ajout des contraintes de clé étrangère (FK)
     -- L'EnsID et l'EtudID doivent exister dans la table Personnes
-    CONSTRAINT fk_seance_ens_obj FOREIGN KEY (EnsID) REFERENCES Personnes (ID),
-    CONSTRAINT fk_seance_etud_obj FOREIGN KEY (EtudID) REFERENCES Personnes (ID)
+    CONSTRAINT fk_seance_ens_obj FOREIGN KEY (EnsID) REFERENCES Enseignants (ID),
+    CONSTRAINT fk_seance_etud_obj FOREIGN KEY (EtudID) REFERENCES Etudiants (ID)
     -- NOTE : La FK vers Salle est plus complexe car Salle a une PK composite/objet.
     -- Si Salles a une PK simple (SID), cette FK fonctionnerait:
     -- CONSTRAINT fk_seance_salle FOREIGN KEY (SalleID) REFERENCES Salles (SID)
@@ -318,6 +349,9 @@ CREATE TABLE Seances (
 #### Avantages de la modélisation orientée objet
 - **Transparence & encapsulation**: Les objets peuvent être déplacés et utilisrs tant que unités complètes, ce qui garentit la cohérence.
 - **Réutilisabilité & simpicité**: la modlélisation orientée objet permet de représenter les les entités complexes par objets apparant simples, mais qui supportent des données complexes. Ceci facilite le transfert des données entre les sites du système distribué.
+
+##### Insertion des données
+voir le fichier [00_dummy_data.sql](00_dummy_data.sql)
 
 ### 5. Fragmentation & Distribution Top-Down
 > **Note:** Avant de commencer la fragmentation, il faut d'abord créer les liens entre les sites. (voir [7. Liens inter-sites](#7-liens-inter-sites)).
@@ -341,9 +375,99 @@ Pour site 1, verticale.
 - **Site 2**: `DepID = 1`.
 - **Site 3**: `DepID = 2`.
 
+#### SITE 1
+``` SQL
+-- 5.1.a. Fragmentation verticale
+CREATE TABLE Personnes_Admin AS
+SELECT ID, Nom, Prenom, Datenais, Adr, Tel, Email, Nss FROM Enseignants
+UNION ALL
+SELECT ID, Nom, Prenom, Datenais, Adr, Tel, Email, Nss FROM Etudiants;
 
+-- 3. Création de Vues Globales (Pour contourner ORA-22804 sur tables objets)
+-- Ces vues "aplatissent" les colonnes pour qu'elles soient vues comme du SQL standard à travers le dblink
 
+CREATE OR REPLACE VIEW V_Etudiants_Global AS
+SELECT 
+    ID, Nom, Prenom, Datenais, Adr, Tel, Email, Nss,
+    EtDateInsc AS DateInsc, EtBac AS Bac, EtStatut AS Statut, EtBourse AS Bourse, DepID
+FROM Etudiants;
 
+CREATE OR REPLACE VIEW V_Enseignants_Global AS
+SELECT 
+    ID, Nom, Prenom, Datenais, Adr, Tel, Email, Nss,
+    EnsEtatCivil AS EtatCivil, EnsDaterect AS DateRect, EnsSpec AS Spec, EnsTitre AS Titre, DepID
+FROM Enseignants;
+
+CREATE OR REPLACE VIEW V_Salles_Global AS
+SELECT 
+    s.SalleID.SID AS SID,
+    s.SalleID.DepID AS DepID,
+    s.SType,
+    s.Snom,
+    s.SNbPlaces,
+    s.Setage,
+    s.Sbloc
+FROM Salles s;
+```
+#### SITE 2
+``` SQL
+-- 5.1. Fragmentation mixte
+-- Etudiants (Données Métier Info)
+CREATE TABLE Etudiants_Info AS
+SELECT *
+FROM V_Etudiants_Global@link_to_siege
+WHERE DepID = 1;
+
+-- Enseignants (Données Métier Info)
+CREATE TABLE Enseignants_Info AS
+SELECT *
+FROM V_Enseignants_Global@link_to_siege
+WHERE DepID = 1;
+
+-- 4. Fragmentation Horizontale - Salles
+CREATE TABLE Salles_Info AS
+SELECT *
+FROM V_Salles_Global@link_to_siege
+WHERE DepID = 1;
+
+-- 5. Fragmentation Horizontale - Séances
+--CREATE TABLE Seances_Info AS
+--SELECT *
+--FROM Seances@link_to_siege
+--WHERE DepID = 1; -- @TODO: depID pas implémenté (a refaire)
+```
+
+#### SITE 3
+``` SQL
+-- 1. Lien vers le Siège
+CREATE DATABASE LINK link_to_siege
+CONNECT TO admin_global IDENTIFIED BY orcl867
+USING 'BDETUDIANT_SITE';
+
+-- 2. Fragmentation Mixte - Etudiants (Données Métier Maths)
+CREATE TABLE Etudiants_Math AS
+SELECT *
+FROM V_Etudiants_Global@link_to_siege
+WHERE DepID = 2;
+
+-- 3. Fragmentation Mixte - Enseignants (Données Métier Maths)
+CREATE TABLE Enseignants_Math AS
+SELECT *
+FROM V_Enseignants_Global@link_to_siege
+WHERE DepID = 2;
+
+-- 4. Fragmentation Horizontale - Salles
+CREATE TABLE Salles_Math AS
+SELECT *
+FROM V_Salles_Global@link_to_siege
+WHERE DepID = 2;
+
+-- 5. Fragmentation Horizontale - Séances
+CREATE TABLE Seances_Math AS
+SELECT *
+FROM Seances@link_to_siege
+WHERE DepID = 2; -- @TODO: depID pas implémenté (a refaire) 
+```
 
 <hr>
 
@@ -365,10 +489,17 @@ CREATE DATABASE LINK link_to_maths
 CONNECT TO AgentMaths IDENTIFIED BY orcl867
 USING 'BDMATHS_SITE';
 ```
+#### Lien vers le Siège
+``` SQL
+CREATE DATABASE LINK link_to_siege
+CONNECT TO admin_global IDENTIFIED BY orcl867
+USING 'BDETUDIANT_SITE';
+``` 
 #### Pour tester les liens
 ``` SQL
 SELECT * FROM dual@link_to_info;
 SELECT * FROM dual@link_to_maths;
+SELECT * FROM dual@link_to_siege;
 ```
 
 ### 8. Automatisation & scheduler
