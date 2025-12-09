@@ -137,7 +137,14 @@ CREATE TYPE T_Enseignant;
 CREATE OR REPLACE TYPE T_Departement AS OBJECT (
     DepID       NUMBER,
     DepDesig    VARCHAR2(100),
-    Chef        REF T_Enseignant
+    Chef        REF T_Enseignant,
+
+    MEMBER FUNCTION afficherMembres RETURN SYS_REFCURSOR,
+    MEMBER PROCEDURE ajouterMembre(p_type VARCHAR2, p_membre_id NUMBER),
+    MEMBER FUNCTION compterEtudiants RETURN NUMBER,
+    MEMBER FUNCTION compterEnseignants RETURN NUMBER,
+    MEMBER FUNCTION afficherInfos RETURN VARCHAR2,
+    MEMBER FUNCTION afficherChef RETURN VARCHAR2
 );
 /
 ```
@@ -146,7 +153,7 @@ CREATE OR REPLACE TYPE T_Departement AS OBJECT (
 ```SQL
 CREATE OR REPLACE TYPE T_ID_Salle AS OBJECT (
     SID NUMBER,
-    DepID NUMBER
+    DepID NUMBER 
 );
 /
 ```
@@ -158,7 +165,13 @@ CREATE TYPE T_Salle AS OBJECT (
     Snom        VARCHAR2(50),
     SNbPlaces   NUMBER,
     Setage      VARCHAR2(20),
-    Sbloc       VARCHAR2(20)
+    Sbloc       VARCHAR2(20),
+    MEMBER FUNCTION afficherOccupation RETURN SYS_REFCURSOR,
+    MEMBER PROCEDURE ajouterReservation(p_EnsID NUMBER, p_EtID NUMBER, p_ScType VARCHAR2,
+                                     p_ScJour VARCHAR2, p_ScCreneau VARCHAR2, p_Descrip VARCHAR2),
+    MEMBER FUNCTION verifierDisponibilite(p_jour VARCHAR2, p_creneau VARCHAR2) RETURN VARCHAR2,
+    MEMBER FUNCTION afficherInfos RETURN VARCHAR2,
+    MEMBER FUNCTION calculerTauxOccupation RETURN NUMBER   
 );
 /
 ```
@@ -173,7 +186,11 @@ CREATE OR REPLACE TYPE T_Personne AS OBJECT (
     Adr         VARCHAR2(100),
     Tel         VARCHAR2(20),
     Email       VARCHAR2(100),
-    Nss         VARCHAR2(50)
+    Nss         VARCHAR2(50),
+
+    MEMBER FUNCTION afficherNomComplet RETURN VARCHAR2,
+    MEMBER FUNCTION calculerAge RETURN NUMBER,
+    MEMBER PROCEDURE modifierContact(p_tel VARCHAR2, p_email VARCHAR2, p_adr VARCHAR2)
 ) NOT FINAL;
 /
 ```
@@ -185,7 +202,16 @@ CREATE OR REPLACE TYPE T_Enseignant UNDER T_Personne (
     EnsDaterect DATE,
     EnsSpec     VARCHAR2(50),
     EnsTitre    VARCHAR2(50),
-    Departement REF T_Departement
+    Departement REF T_Departement,
+
+    MEMBER PROCEDURE ajouterSeance(p_EtID NUMBER, p_ScType VARCHAR2, p_ScJour VARCHAR2,
+                                 p_ScCreneau VARCHAR2, p_Descrip VARCHAR2,
+                                 p_SID NUMBER, p_DepID NUMBER),
+    MEMBER PROCEDURE modifierGrade(p_nouveau_titre VARCHAR2),
+    MEMBER FUNCTION afficherPlanning RETURN SYS_REFCURSOR,
+    MEMBER FUNCTION calculerAnciennete RETURN NUMBER,
+    MEMBER FUNCTION afficherInfos RETURN VARCHAR2,
+    OVERRIDING MEMBER FUNCTION afficherNomComplet RETURN VARCHAR2
 
 );
 /
@@ -198,7 +224,15 @@ CREATE OR REPLACE TYPE T_Etudiant UNDER T_Personne (
     EtBac       VARCHAR2(4),
     EtStatut    VARCHAR2(20),
     EtBourse    VARCHAR2(20),
-    Departement REF T_Departement
+    Departement REF T_Departement,
+
+    MEMBER FUNCTION afficherInfos RETURN VARCHAR2,
+    MEMBER PROCEDURE inscrire(p_EnsID NUMBER, p_ScType VARCHAR2, p_ScJour VARCHAR2,
+                            p_ScCreneau VARCHAR2, p_Descrip VARCHAR2, p_SID NUMBER),
+    MEMBER PROCEDURE changerNiveau(p_nouveau_statut VARCHAR2),
+    MEMBER FUNCTION payerFrais(p_montant NUMBER) RETURN VARCHAR2,
+    MEMBER FUNCTION verifierBourse RETURN VARCHAR2,
+    OVERRIDING MEMBER FUNCTION afficherNomComplet RETURN VARCHAR2
 
 );
 /
@@ -206,8 +240,8 @@ CREATE OR REPLACE TYPE T_Etudiant UNDER T_Personne (
 
 #### Création des Tables Objets
 
+##### Table pour stocker Département
 ```SQL
--- Table pour stocker Département
 CREATE TABLE Departements OF T_Departement
     (CONSTRAINT pk_dept PRIMARY KEY (DepID));
 ```
@@ -279,17 +313,63 @@ CREATE TABLE Seances (
     -- CONSTRAINT fk_seance_salle FOREIGN KEY (SalleID) REFERENCES Salles (SID)
 );
 ```
+> **Note**: Executer ces requêtes sur les 3 sites.
 
 #### Avantages de la modélisation orientée objet
-- Transparence & encapsulation: Les objets peuvent être déplacés et utilis´es tant que unités complètes, ce qui garentit la cohérence.
-- Réutilisabilité & simpicité: la modlélisation orientée objet permet de représenter les les entités complexes par objets apparant simples, mais qui supportent des données complexes. Ceci facilite le transfert des données entre les sites du système distribué.
+- **Transparence & encapsulation**: Les objets peuvent être déplacés et utilisrs tant que unités complètes, ce qui garentit la cohérence.
+- **Réutilisabilité & simpicité**: la modlélisation orientée objet permet de représenter les les entités complexes par objets apparant simples, mais qui supportent des données complexes. Ceci facilite le transfert des données entre les sites du système distribué.
 
 ### 5. Fragmentation & Distribution Top-Down
+> **Note:** Avant de commencer la fragmentation, il faut d'abord créer les liens entre les sites. (voir [7. Liens inter-sites](#7-liens-inter-sites)).
+
+#### 5.1.Fragmentation des Etudiants & Enseignants
+Le type de fragmentation pour site 2 & 3 est la fragmentation mixte.
+Pour site 1, verticale.
+##### 5.1.a. Fragmentatioin Verticale
+**Objectif**: Séparer les informations personnels des données métier.
+- **Site 1**: stocker les données de l'objet `Personne`.
+- **Site 2**: stocker les données de l'objet `Etudiant`.
+- **Site 3**: stocker les données de l'objet `Enseignant`.
+
+##### 5.1.b. Fragmentatioin Horizontale
+**Objectif**: Distribuer les données métier sur les sites selon le departement.
+- **Site 2**: `DepID = 1`.
+- **Site 3**: `DepID = 2`.
+
+#### 5.2 Fragmentation des Salles & Séances (Horizontale)
+**Objectif**: Distribuer sur les sites selon le departement.
+- **Site 2**: `DepID = 1`.
+- **Site 3**: `DepID = 2`.
+
+
+
+
+
+<hr>
 
 ### 6. Reconstitution
 
-### 7. Liens inter-sites (DBLINK)
-Déja fait normalement...
+### 7. Liens inter-sites
+``` SQL
+ALTER SYSTEM SET GLOBAL_NAMES = FALSE;
+```
+#### Lien vers Departement informatique
+``` SQL
+CREATE DATABASE LINK link_to_info
+CONNECT TO AgentInfo IDENTIFIED BY orcl867
+USING 'BDINFO_SITE';
+```
+#### Lien vers Departement mathématique\n
+``` SQL
+CREATE DATABASE LINK link_to_maths
+CONNECT TO AgentMaths IDENTIFIED BY orcl867
+USING 'BDMATHS_SITE';
+```
+#### Pour tester les liens
+``` SQL
+SELECT * FROM dual@link_to_info;
+SELECT * FROM dual@link_to_maths;
+```
 
 ### 8. Automatisation & scheduler
 
