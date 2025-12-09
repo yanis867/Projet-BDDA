@@ -469,7 +469,6 @@ FROM Seances@link_to_siege
 WHERE DepID = 2; -- @TODO: depID pas implémenté (a refaire) 
 ```
 
-<hr>
 
 ### 6. Reconstitution
 
